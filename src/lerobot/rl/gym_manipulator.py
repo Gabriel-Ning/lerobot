@@ -605,6 +605,12 @@ def control_loop(
             REWARD: {"dtype": "float32", "shape": (1,), "names": None},
             DONE: {"dtype": "bool", "shape": (1,), "names": None},
         }
+        # Label of where the executed action came from: base_policy / gamepad / planner
+        features["complementary_info.intervention_source"] = {
+            "dtype": "int64",
+            "shape": (1,),
+            "names": None,
+        }
         if use_gripper:
             features["complementary_info.discrete_penalty"] = {
                 "dtype": "float32",
@@ -670,6 +676,11 @@ def control_loop(
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
             )
+            # Encode intervention source as an integer label for logging
+            source_str = transition[TransitionKey.INFO].get("intervention_source", "base_policy")
+            source_map = {"base_policy": 0, "gamepad": 1, "planner": 2}
+            source_id = source_map.get(source_str, 0)
+
             frame = {
                 **observations,
                 ACTION: action_to_record.cpu(),
@@ -679,6 +690,8 @@ def control_loop(
             if use_gripper:
                 discrete_penalty = transition[TransitionKey.COMPLEMENTARY_DATA].get("discrete_penalty", 0.0)
                 frame["complementary_info.discrete_penalty"] = np.array([discrete_penalty], dtype=np.float32)
+            # Always log where the intervention came from (base_policy=0, gamepad=1, planner=2)
+            frame["complementary_info.intervention_source"] = np.array([source_id], dtype=np.int64)
 
             if dataset is not None:
                 frame["task"] = cfg.dataset.task
