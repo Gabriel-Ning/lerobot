@@ -599,18 +599,31 @@ def control_loop(
 
     dataset = None
     if cfg.mode == "record":
-        action_features = teleop_device.action_features
+    # Handle gym_hil environments where teleop_device is None
+        if teleop_device is None:
+            # For gym_hil, get action features from the environment
+            action_shape = env.action_space.shape
+            action_features = {
+                "dtype": "float32",
+                "shape": action_shape,
+                "names": None,
+            }
+        else:
+            action_features = teleop_device.action_features
+        
         features = {
             ACTION: action_features,
             REWARD: {"dtype": "float32", "shape": (1,), "names": None},
             DONE: {"dtype": "bool", "shape": (1,), "names": None},
         }
+        
         # Label of where the executed action came from: base_policy / gamepad / planner
         features["complementary_info.intervention_source"] = {
             "dtype": "int64",
             "shape": (1,),
             "names": None,
         }
+        
         if use_gripper:
             features["complementary_info.discrete_penalty"] = {
                 "dtype": "float32",
@@ -651,7 +664,7 @@ def control_loop(
         step_start_time = time.perf_counter()
 
         # Create a neutral action (no movement)
-        neutral_action = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
+        neutral_action = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
         if use_gripper:
             neutral_action = torch.cat([neutral_action, torch.tensor([1.0])])  # Gripper stay
 
