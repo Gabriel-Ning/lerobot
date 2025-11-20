@@ -542,7 +542,12 @@ def step_env_and_process_transition(
     truncated = truncated or processed_action_transition[TransitionKey.TRUNCATED]
     
     complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
-    complementary_data['teleop_action'] = info.get('teleop_action', None)
+    # complementary_data['teleop_action'] = info.get('teleop_action', None)
+    if isinstance(info["teleop_action"], np.ndarray):
+        final_action = torch.tensor(info["teleop_action"], device=action.device, dtype=action.dtype)
+    complementary_data['teleop_action'] = final_action
+
+    print("Step teleop action:", complementary_data['teleop_action'])
     
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
@@ -696,6 +701,7 @@ def control_loop(
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
             )
+            print("     Recording action:", action_to_record)
             # Encode intervention source as an integer label for logging
             source_str = transition[TransitionKey.INFO].get("intervention_source", "base_policy")
             source_map = {"base_policy": 0, "gamepad": 1, "planner": 2}
