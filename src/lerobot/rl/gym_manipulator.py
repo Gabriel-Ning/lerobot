@@ -531,6 +531,7 @@ def step_env_and_process_transition(
     transition[TransitionKey.OBSERVATION] = (
         env.get_raw_joint_positions() if hasattr(env, "get_raw_joint_positions") else {}
     )
+    
     processed_action_transition = action_processor(transition)
     processed_action = processed_action_transition[TransitionKey.ACTION]
 
@@ -539,7 +540,10 @@ def step_env_and_process_transition(
     reward = reward + processed_action_transition[TransitionKey.REWARD]
     terminated = terminated or processed_action_transition[TransitionKey.DONE]
     truncated = truncated or processed_action_transition[TransitionKey.TRUNCATED]
+    
     complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
+    complementary_data['teleop_action'] = info.get('teleop_action', None)
+    
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
 
@@ -664,11 +668,14 @@ def control_loop(
         step_start_time = time.perf_counter()
 
         # Create a neutral action (no movement)
-        neutral_action = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+        neutral_action = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
         if use_gripper:
             neutral_action = torch.cat([neutral_action, torch.tensor([1.0])])  # Gripper stay
 
         # Use the new step function
+        # This function will never modify TransitionKey.ACTION
+        # After this function, transition should have neutral action in TransitionKey.ACTION,
+        # and Teleop action in TransitionKey.COMPLEMENTARY_DATA["teleop_action"]
         transition = step_env_and_process_transition(
             env=env,
             transition=transition,
