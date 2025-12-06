@@ -590,6 +590,7 @@ def add_actor_information_and_train(
 
         # Save checkpoint at specified intervals
         if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == online_steps):
+            logging.info(f"[LEARNER] Saving checkpoint at step {optimization_step}")
             save_training_checkpoint(
                 cfg=cfg,
                 optimization_step=optimization_step,
@@ -868,6 +869,9 @@ def handle_resume_logic(cfg: TrainRLServerPipelineConfig) -> TrainRLServerPipeli
     checkpoint_cfg_path = os.path.join(checkpoint_dir, PRETRAINED_MODEL_DIR, "train_config.json")
     checkpoint_cfg = TrainRLServerPipelineConfig.from_pretrained(checkpoint_cfg_path)
 
+    # add pretrained model path to policy config by hemiao
+    checkpoint_cfg.policy.pretrained_path = os.path.join(checkpoint_dir, PRETRAINED_MODEL_DIR)
+
     # Ensure resume flag is set in returned config
     checkpoint_cfg.resume = True
     return checkpoint_cfg
@@ -932,75 +936,111 @@ def log_training_info(cfg: TrainRLServerPipelineConfig, policy: nn.Module) -> No
     logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
 
+# def initialize_replay_buffer(
+#     cfg: TrainRLServerPipelineConfig, device: str, storage_device: str
+# ) -> ReplayBuffer:
+#     """
+#     Initialize a replay buffer, either empty or from a dataset if resuming.
+
+#     Args:
+#         cfg (TrainRLServerPipelineConfig): Training configuration
+#         device (str): Device to store tensors on
+#         storage_device (str): Device for storage optimization
+
+#     Returns:
+#         ReplayBuffer: Initialized replay buffer
+#     """
+#     if not cfg.resume:
+#         return ReplayBuffer(
+#             capacity=cfg.policy.online_buffer_capacity,
+#             device=device,
+#             state_keys=cfg.policy.input_features.keys(),
+#             storage_device=storage_device,
+#             optimize_memory=True,
+#         )
+
+#     logging.info("Resume training load the online dataset")
+#     dataset_path = os.path.join(cfg.output_dir, "dataset")
+
+#     # NOTE: In RL is possible to not have a dataset.
+#     repo_id = None
+#     if cfg.dataset is not None:
+#         repo_id = cfg.dataset.repo_id
+#     dataset = LeRobotDataset(
+#         repo_id=repo_id,
+#         root=dataset_path,
+#     )
+#     return ReplayBuffer.from_lerobot_dataset(
+#         lerobot_dataset=dataset,
+#         capacity=cfg.policy.online_buffer_capacity,
+#         device=device,
+#         state_keys=cfg.policy.input_features.keys(),
+#         optimize_memory=True,
+#     )
+
 def initialize_replay_buffer(
     cfg: TrainRLServerPipelineConfig, device: str, storage_device: str
 ) -> ReplayBuffer:
-    """
-    Initialize a replay buffer, either empty or from a dataset if resuming.
-
-    Args:
-        cfg (TrainRLServerPipelineConfig): Training configuration
-        device (str): Device to store tensors on
-        storage_device (str): Device for storage optimization
-
-    Returns:
-        ReplayBuffer: Initialized replay buffer
-    """
-    if not cfg.resume:
-        return ReplayBuffer(
-            capacity=cfg.policy.online_buffer_capacity,
-            device=device,
-            state_keys=cfg.policy.input_features.keys(),
-            storage_device=storage_device,
-            optimize_memory=True,
-        )
-
-    logging.info("Resume training load the online dataset")
-    dataset_path = os.path.join(cfg.output_dir, "dataset")
-
-    # NOTE: In RL is possible to not have a dataset.
-    repo_id = None
-    if cfg.dataset is not None:
-        repo_id = cfg.dataset.repo_id
-    dataset = LeRobotDataset(
-        repo_id=repo_id,
-        root=dataset_path,
-    )
-    return ReplayBuffer.from_lerobot_dataset(
-        lerobot_dataset=dataset,
+    # 无论是否 resume，暂时都从空 buffer 开始
+    # （或者你加一个 cfg.flag 控制）
+    logging.info("Skip loading online dataset, start with empty replay buffer even when resume=True")
+    return ReplayBuffer(
         capacity=cfg.policy.online_buffer_capacity,
         device=device,
         state_keys=cfg.policy.input_features.keys(),
+        storage_device=storage_device,
         optimize_memory=True,
     )
 
+# def initialize_offline_replay_buffer(
+#     cfg: TrainRLServerPipelineConfig,
+#     device: str,
+#     storage_device: str,
+# ) -> ReplayBuffer:
+#     """
+#     Initialize an offline replay buffer from a dataset.
+
+#     Args:
+#         cfg (TrainRLServerPipelineConfig): Training configuration
+#         device (str): Device to store tensors on
+#         storage_device (str): Device for storage optimization
+
+#     Returns:
+#         ReplayBuffer: Initialized offline replay buffer
+#     """
+#     if not cfg.resume:
+#         logging.info("make_dataset offline buffer")
+#         offline_dataset = make_dataset(cfg)
+#     else:
+#         logging.info("load offline dataset")
+#         dataset_offline_path = os.path.join(cfg.output_dir, "dataset_offline")
+#         offline_dataset = LeRobotDataset(
+#             repo_id=cfg.dataset.repo_id,
+#             root=dataset_offline_path,
+#         )
+
+#     logging.info("Convert to a offline replay buffer")
+#     offline_replay_buffer = ReplayBuffer.from_lerobot_dataset(
+#         offline_dataset,
+#         device=device,
+#         state_keys=cfg.policy.input_features.keys(),
+#         storage_device=storage_device,
+#         optimize_memory=True,
+#         capacity=cfg.policy.offline_buffer_capacity,
+#     )
+#     return offline_replay_buffer
 
 def initialize_offline_replay_buffer(
     cfg: TrainRLServerPipelineConfig,
     device: str,
     storage_device: str,
 ) -> ReplayBuffer:
-    """
-    Initialize an offline replay buffer from a dataset.
-
-    Args:
-        cfg (TrainRLServerPipelineConfig): Training configuration
-        device (str): Device to store tensors on
-        storage_device (str): Device for storage optimization
-
-    Returns:
-        ReplayBuffer: Initialized offline replay buffer
-    """
-    if not cfg.resume:
-        logging.info("make_dataset offline buffer")
-        offline_dataset = make_dataset(cfg)
-    else:
-        logging.info("load offline dataset")
-        dataset_offline_path = os.path.join(cfg.output_dir, "dataset_offline")
-        offline_dataset = LeRobotDataset(
-            repo_id=cfg.dataset.repo_id,
-            root=dataset_offline_path,
-        )
+    # 无论是否 resume，暂时都从空 buffer 开始
+    # （或者你加一个 cfg.flag 控制）
+    logging.info("Skip loading offline dataset, start with empty replay buffer even when resume=True")
+    
+    logging.info("make_dataset offline buffer")
+    offline_dataset = make_dataset(cfg)
 
     logging.info("Convert to a offline replay buffer")
     offline_replay_buffer = ReplayBuffer.from_lerobot_dataset(
@@ -1012,7 +1052,6 @@ def initialize_offline_replay_buffer(
         capacity=cfg.policy.offline_buffer_capacity,
     )
     return offline_replay_buffer
-
 
 # Utilities/Helpers functions
 

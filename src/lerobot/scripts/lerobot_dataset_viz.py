@@ -118,6 +118,14 @@ def visualize_dataset(
 
     spawn_local_viewer = mode == "local" and not save
     rr.init(f"{repo_id}/episode_{episode_index}", spawn=spawn_local_viewer)
+    rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP)
+    # 绘制世界坐标系
+    origin = np.array([[0, 0, 0]], dtype=np.float32)
+
+    rr.log("world/axes/x", rr.Arrows3D(origins=origin, vectors=[[1, 0, 0]], colors=[[255, 0, 0]],))
+    rr.log("world/axes/y", rr.Arrows3D(origins=origin, vectors=[[0, 1, 0]], colors=[[0, 255, 0]],))
+    rr.log("world/axes/z", rr.Arrows3D(origins=origin, vectors=[[0, 0, 1]], colors=[[0, 0, 255]],))
+
 
     # Manually call python garbage collector after `rr.init` to avoid hanging in a blocking flush
     # when iterating on a dataloader with `num_workers` > 0
@@ -128,6 +136,12 @@ def visualize_dataset(
         rr.serve_web_viewer(open_browser=False, web_port=web_port)
 
     logging.info("Logging to Rerun")
+
+    # 在 dataloader 循环外部初始化
+    pts = np.zeros(3, dtype=np.float32)
+    positions = []
+
+    ee_positions = []
 
     for batch in tqdm.tqdm(dataloader, total=len(dataloader)):
         # iterate over the batch
@@ -145,10 +159,25 @@ def visualize_dataset(
                 for dim_idx, val in enumerate(batch[ACTION][i]):
                     rr.log(f"{ACTION}/{dim_idx}", rr.Scalars(val.item()))
 
+                delta = batch[ACTION][i][:3].numpy()  # 取前三维 Δxyz
+                pts += delta                           # 累加得到全局 XYZ
+
+                positions.append(pts.copy())
+                traj = np.stack(positions, axis=0)
+
+                rr.log("world/pos/traj",  rr.LineStrips3D(traj[None, :, :]))
+                rr.log("world/pos/point", rr.Points3D(traj[-1:]))
+
             # display each dimension of observed state space (e.g. agent position in joint space)
             if OBS_STATE in batch:
                 for dim_idx, val in enumerate(batch[OBS_STATE][i]):
                     rr.log(f"state/{dim_idx}", rr.Scalars(val.item()))
+
+                ee_positions.append(batch[OBS_STATE][i][-3:].numpy())  # 取后三维 xyz
+                ee_traj = np.stack(ee_positions, axis=0)
+
+                rr.log("world/pos/ee_traj",  rr.LineStrips3D(ee_traj[None, :, :]))
+                rr.log("world/pos/ee_point", rr.Points3D(ee_traj[-1:]))
 
             if DONE in batch:
                 rr.log(DONE, rr.Scalars(batch[DONE][i].item()))
