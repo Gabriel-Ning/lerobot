@@ -562,7 +562,7 @@ def step_env_and_process_transition(
         final_action = torch.tensor(final_action, device=action.device, dtype=action.dtype)
     complementary_data['teleop_action'] = final_action
 
-    print("Step teleop action:", complementary_data['teleop_action'])
+    logging.info("Step teleop action:", complementary_data['teleop_action'])
     
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
@@ -684,7 +684,6 @@ def control_loop(
     episode_step = 0
     episode_start_time = time.perf_counter()
     logging.info(f"episode [{episode_idx}] starting ...")
-    print(f"Episode [{episode_idx}] starting...")
 
     while episode_idx < cfg.dataset.num_episodes_to_record:
         step_start_time = time.perf_counter()
@@ -719,7 +718,7 @@ def control_loop(
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
             )
-            print("     Recording action:", action_to_record)
+            logging.info(f"     Recording action: {action_to_record}")
             # Encode intervention source as an integer label for logging
             source_str = transition[TransitionKey.INFO].get("intervention_source", "base_policy")
             source_map = {"base_policy": 0, "gamepad": 1, "planner": 2}
@@ -749,31 +748,25 @@ def control_loop(
             logging.info(
                 f"    Episode [{episode_idx}] ended after {episode_step} steps in {episode_time:.1f}s with reward {transition[TransitionKey.REWARD]}"
             )
-            print(f"    Episode [{episode_idx}] ended after {episode_step} steps in {episode_time:.1f}s with reward {transition[TransitionKey.REWARD]}")
             episode_step = 0
             episode_idx += 1
 
             if dataset is not None:
                 if transition[TransitionKey.INFO].get(TeleopEvents.RERECORD_EPISODE, False):
                     logging.info(f"Re-recording episode {episode_idx}")
-                    print(f"Re-recording episode {episode_idx}")
                     dataset.clear_episode_buffer()
                     episode_idx -= 1
                 else:
                     if cfg.env.name == "suite_hil":
                         if episode_idx == 1:
-                            logging.info(f"SuiteHIL environment detected, not saving episode {episode_idx}")
                             dataset.clear_episode_buffer()
-                            print(f"Ignore spisode {episode_idx}")
+                            logging.info(f"Ignore episode {episode_idx}")
                         else:
                             dataset.save_episode()
                             logging.info(f"Saving episode {episode_idx}")
-                            print(f"Saving episode {episode_idx}")
                     else:
                         dataset.save_episode()
-                        logging.info(f"Saving episode {episode_idx}")
-                        print(f"Saving episode {episode_idx}")
-                        
+                        logging.info(f"Saving episode {episode_idx}")                        
                         
 
             # Reset for new episode
