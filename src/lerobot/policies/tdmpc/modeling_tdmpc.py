@@ -138,12 +138,16 @@ class TDMPCPolicy(PreTrainedPolicy):
         if ACTION in batch:
             batch.pop(ACTION)
 
+        print(f"before select_action keys: {list(batch.keys())}")
+
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGE] = batch[next(iter(self.config.image_features))]
         # NOTE: for offline evaluation, we have action in the batch, so we need to pop it out
         if ACTION in batch:
             batch.pop(ACTION)
+
+        print(f"after select_action keys: {list(batch.keys())}")
 
         self._queues = populate_queues(self._queues, batch)
 
@@ -739,20 +743,43 @@ class TDMPCObservationEncoder(nn.Module):
                 nn.Sigmoid(),
             )
 
-    def forward(self, obs_dict: dict[str, Tensor]) -> Tensor:
-        """Encode the image and/or state vector.
+    # def forward(self, obs_dict: dict[str, Tensor]) -> Tensor:
+    #     """Encode the image and/or state vector.
 
-        Each modality is encoded into a feature vector of size (latent_dim,) and then a uniform mean is taken
-        over all features.
-        """
+    #     Each modality is encoded into a feature vector of size (latent_dim,) and then a uniform mean is taken
+    #     over all features.
+    #     """
+    #     feat = []
+    #     print("------------obs_dict keys:", obs_dict.keys())
+    #     print("------------config.image_features:", self.config.image_features)
+    #     # NOTE: Order of observations matters here.
+    #     if self.config.image_features:
+    #         feat.append(
+    #             flatten_forward_unflatten(
+    #                 self.image_enc_layers, obs_dict[next(iter(self.config.image_features))]
+    #             )
+    #         )
+    #     if self.config.env_state_feature:
+    #         feat.append(self.env_state_enc_layers(obs_dict[OBS_ENV_STATE]))
+    #     if self.config.robot_state_feature:
+    #         feat.append(self.state_enc_layers(obs_dict[OBS_STATE]))
+    #     return torch.stack(feat, dim=0).mean(0)
+
+    def forward(self, obs_dict: dict[str, Tensor]) -> Tensor:
         feat = []
-        # NOTE: Order of observations matters here.
         if self.config.image_features:
-            feat.append(
-                flatten_forward_unflatten(
-                    self.image_enc_layers, obs_dict[next(iter(self.config.image_features))]
-                )
-            )
+            img_feature_key = next(iter(self.config.image_features))
+            if img_feature_key in obs_dict:
+                img_tensor = obs_dict[img_feature_key]
+            elif OBS_IMAGE in obs_dict:
+                img_tensor = obs_dict[OBS_IMAGE]
+            else:
+                # fallback: find any image-like key
+                candidate = next((k for k in obs_dict if "image" in k or "images" in k), None)
+                if candidate is None:
+                    raise KeyError(f"Missing image feature; tried '{img_feature_key}' and '{OBS_IMAGE}'. Keys: {list(obs_dict.keys())}")
+                img_tensor = obs_dict[candidate]
+            feat.append(flatten_forward_unflatten(self.image_enc_layers, img_tensor))
         if self.config.env_state_feature:
             feat.append(self.env_state_enc_layers(obs_dict[OBS_ENV_STATE]))
         if self.config.robot_state_feature:
