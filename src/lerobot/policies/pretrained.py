@@ -26,6 +26,7 @@ from huggingface_hub import HfApi, ModelCard, ModelCardData, hf_hub_download
 from huggingface_hub.constants import SAFETENSORS_SINGLE_FILE
 from huggingface_hub.errors import HfHubHTTPError
 from safetensors.torch import load_model as load_model_as_safetensor, save_model as save_model_as_safetensor
+from termcolor import colored
 from torch import Tensor, nn
 from typing_extensions import Unpack
 
@@ -106,9 +107,9 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         model_id = str(pretrained_name_or_path)
         instance = cls(config, **kwargs)
         if os.path.isdir(model_id):
-            print("Loading weights from local directory")
             model_file = os.path.join(model_id, SAFETENSORS_SINGLE_FILE)
             policy = cls._load_as_safetensor(instance, model_file, config.device, strict)
+            logging.info(colored(f"Loading weights from local directory: {model_file}", "yellow", attrs=["bold"]))
         else:
             try:
                 model_file = hf_hub_download(
