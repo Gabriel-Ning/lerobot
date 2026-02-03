@@ -91,6 +91,12 @@ class DatasetConfig:
     num_episodes_to_record: int = 5
     replay_episode: int | None = None
     push_to_hub: bool = False
+    # Video codec for encoding videos. Options: 'h264', 'hevc', 'libsvtav1'.
+    vcodec: str = "libsvtav1"
+    # If True, encode videos in parallel using ProcessPoolExecutor when multiple cameras exist.
+    parallel_encoding: bool = True
+    # Number of episodes to record before batch encoding videos.
+    video_encoding_batch_size: int = 1
 
 
 @dataclass
@@ -311,18 +317,15 @@ def make_robot_env(cfg: HILSerlRobotEnvConfig) -> tuple[gym.Env, Any]:
     # Check if this is a GymHIL simulation environment
     if cfg.name == "gym_hil":
         assert cfg.robot is None and cfg.teleop is None, "GymHIL environment does not support robot or teleop"
-        import gym_hil  # noqa: F401
+        # import gym_hil  # noqa: F401
+        import stripe
 
         # Extract gripper settings with defaults
         use_gripper = cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else True
         gripper_penalty = cfg.processor.gripper.gripper_penalty if cfg.processor.gripper is not None else 0.0
 
         env = gym.make(
-            f"gym_hil/{cfg.task}",
-            image_obs=True,
-            render_mode="human",
-            use_gripper=use_gripper,
-            gripper_penalty=gripper_penalty,
+            f"{cfg.task}"
         )
 
         return env, None
@@ -563,7 +566,7 @@ def step_env_and_process_transition(
         final_action = torch.tensor(final_action, device=action.device, dtype=action.dtype)
     complementary_data['teleop_action'] = final_action
 
-    logging.info("Step teleop action:", complementary_data['teleop_action'])
+    logging.info("Step teleop action: %s", complementary_data["teleop_action"])
     
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
@@ -679,6 +682,8 @@ def control_loop(
             image_writer_threads=4,
             image_writer_processes=0,
             features=features,
+            batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+            vcodec=cfg.dataset.vcodec,
         )
 
     episode_idx = 0
@@ -763,10 +768,10 @@ def control_loop(
                             dataset.clear_episode_buffer()
                             logging.info(f"Ignore episode {episode_idx}")
                         else:
-                            dataset.save_episode()
+                            dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
                             logging.info(f"Saving episode {episode_idx}")
                     else:
-                        dataset.save_episode()
+                        dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
                         logging.info(f"Saving episode {episode_idx}")                        
                         
 
