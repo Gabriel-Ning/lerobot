@@ -130,6 +130,7 @@ class GamepadTeleop(Teleoperator):
                 TeleopEvents.TERMINATE_EPISODE: False,
                 TeleopEvents.SUCCESS: False,
                 TeleopEvents.RERECORD_EPISODE: False,
+                TeleopEvents.PLANNER_INTERVENTION: False,
             }
 
         # Update gamepad state to get fresh inputs
@@ -137,6 +138,9 @@ class GamepadTeleop(Teleoperator):
 
         # Check if intervention is active
         is_intervention = self.gamepad.should_intervene()
+
+        # Check if planner intervention is active (LB button)
+        planner_intervention = self.gamepad.should_planner_intervene()
 
         # Get episode end status
         episode_end_status = self.gamepad.get_episode_end_status()
@@ -152,6 +156,7 @@ class GamepadTeleop(Teleoperator):
             TeleopEvents.TERMINATE_EPISODE: terminate_episode,
             TeleopEvents.SUCCESS: success,
             TeleopEvents.RERECORD_EPISODE: rerecord_episode,
+            TeleopEvents.PLANNER_INTERVENTION: planner_intervention,
         }
 
     def disconnect(self) -> None:
