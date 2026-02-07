@@ -320,6 +320,9 @@ class SACPolicy(
         actions_discrete: Tensor = actions[:, DISCRETE_DIMENSION_INDEX:].clone()
         actions_discrete = torch.round(actions_discrete)
         actions_discrete = actions_discrete.long()
+        # if self.config.num_discrete_actions == 3:
+        #     # Map gripper command from {-1, 0, 1} to {0, 1, 2}
+        #     actions_discrete = actions_discrete + 1
 
         discrete_penalties: Tensor | None = None
         if complementary_info is not None:
