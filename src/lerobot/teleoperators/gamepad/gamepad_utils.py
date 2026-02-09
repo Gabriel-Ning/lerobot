@@ -37,7 +37,6 @@ class InputController:
         self.running = True
         self.episode_end_status = None  # None, "success", or "failure"
         self.intervention_flag = False
-        self.planner_intervention_flag = False
         self.open_gripper_command = False
         self.close_gripper_command = False
 
@@ -80,10 +79,6 @@ class InputController:
     def should_intervene(self):
         """Return True if intervention flag was set."""
         return self.intervention_flag
-
-    def should_planner_intervene(self):
-        """Return True if planner intervention flag was set (LB button)."""
-        return self.planner_intervention_flag
 
     def gripper_command(self):
         """Return the current gripper command."""
@@ -283,12 +278,6 @@ class GamepadController(InputController):
             else:
                 self.intervention_flag = False
 
-            # Check for LB button (typically button 4) for planner intervention flag
-            if self.joystick.get_button(4):
-                self.planner_intervention_flag = True
-            else:
-                self.planner_intervention_flag = False
-
     def get_deltas(self):
         """Get the current movement deltas from gamepad state."""
         import pygame
@@ -439,10 +428,6 @@ class GamepadControllerHID(InputController):
 
                 # Check if RB is pressed then the intervention flag should be set
                 self.intervention_flag = data[6] in [2, 6, 10, 14]
-
-                # Check if LB is pressed for planner intervention
-                # LB is typically encoded in data[6] with value 1
-                self.planner_intervention_flag = data[6] in [1, 3, 5, 7, 9, 11, 13, 15]
 
                 # Check if RT is pressed
                 self.open_gripper_command = data[6] in [8, 10, 12]
