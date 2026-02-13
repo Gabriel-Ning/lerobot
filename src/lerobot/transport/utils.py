@@ -144,7 +144,7 @@ def bytes_to_transitions(buffer: bytes) -> list[Transition]:
     # Allow numpy scalar used in serialized transitions.
     import numpy as np
     with torch.serialization.safe_globals(
-        [np._core.multiarray.scalar, np.dtype, np.dtypes.Float64DType]
+        [np._core.multiarray.scalar, np.dtype, np.dtypes.Float64DType, np.dtypes.BoolDType]
     ):
         transitions = torch.load(bytes_buffer, weights_only=True)
     return transitions
