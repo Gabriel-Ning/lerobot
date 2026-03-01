@@ -212,10 +212,8 @@ class ReplayBuffer:
 
         self.actions[self.position].copy_(action.squeeze(dim=0))
         self.rewards[self.position] = reward
-        # Convert numpy.bool_ to Python bool for torch tensor assignment
-        # This handles cases where done/truncated come from processors or other sources
-        self.dones[self.position] = bool(done)
-        self.truncateds[self.position] = bool(truncated)
+        self.dones[self.position] = done
+        self.truncateds[self.position] = truncated
 
         # Handle complementary_info if provided and storage is initialized
         if complementary_info is not None and self.has_complementary_info:

@@ -140,13 +140,7 @@ def bytes_to_python_object(buffer: bytes) -> Any:
 def bytes_to_transitions(buffer: bytes) -> list[Transition]:
     bytes_buffer = io.BytesIO(buffer)
     bytes_buffer.seek(0)
-    # PyTorch 2.6+ defaults weights_only=True and restricts globals.
-    # Allow numpy scalar used in serialized transitions.
-    import numpy as np
-    with torch.serialization.safe_globals(
-        [np._core.multiarray.scalar, np.dtype, np.dtypes.Float64DType, np.dtypes.BoolDType]
-    ):
-        transitions = torch.load(bytes_buffer, weights_only=True)
+    transitions = torch.load(bytes_buffer, weights_only=True)
     return transitions
 
 

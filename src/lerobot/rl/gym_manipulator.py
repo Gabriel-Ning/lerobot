@@ -92,12 +92,6 @@ class DatasetConfig:
     num_episodes_to_record: int = 5
     replay_episode: int | None = None
     push_to_hub: bool = False
-    # Video codec for encoding videos. Options: 'h264', 'hevc', 'libsvtav1'.
-    vcodec: str = "libsvtav1"
-    # If True, encode videos in parallel using ProcessPoolExecutor when multiple cameras exist.
-    parallel_encoding: bool = True
-    # Number of episodes to record before batch encoding videos.
-    video_encoding_batch_size: int = 1
 
 
 @dataclass
@@ -318,28 +312,19 @@ def make_robot_env(cfg: HILSerlRobotEnvConfig) -> tuple[gym.Env, Any]:
     # Check if this is a GymHIL simulation environment
     if cfg.name == "gym_hil":
         assert cfg.robot is None and cfg.teleop is None, "GymHIL environment does not support robot or teleop"
-        # import gym_hil  # noqa: F401
-        import stripe
+        import gym_hil  # noqa: F401
 
         # Extract gripper settings with defaults
         use_gripper = cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else True
         gripper_penalty = cfg.processor.gripper.gripper_penalty if cfg.processor.gripper is not None else 0.0
 
         env = gym.make(
-            f"{cfg.task}"
+            f"gym_hil/{cfg.task}",
+            image_obs=True,
+            render_mode="human",
+            use_gripper=use_gripper,
+            gripper_penalty=gripper_penalty,
         )
-
-        return env, None
-    elif cfg.name == "suite_hil":
-        assert cfg.robot is None and cfg.teleop is None, "GymHIL environment does not support robot or teleop"
-        import gym_hil  # noqa: F401
-        from gym_hil.wrappers.factory import make_robosuite_wrapperd_env
-
-        # Extract gripper settings with defaults
-        use_gripper = cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else True
-        gripper_penalty = cfg.processor.gripper.gripper_penalty if cfg.processor.gripper is not None else 0.0
-
-        env = make_robosuite_wrapperd_env()
 
         return env, None
 
@@ -388,7 +373,7 @@ def make_processors(
         cfg.processor.reset.terminate_on_success if cfg.processor.reset is not None else True
     )
 
-    if cfg.name == "gym_hil" or cfg.name == "suite_hil":
+    if cfg.name == "gym_hil":
         action_pipeline_steps = [
             InterventionActionProcessorStep(terminate_on_success=terminate_on_success),
             Torch2NumpyActionProcessorStep(),
@@ -557,7 +542,6 @@ def step_env_and_process_transition(
     transition[TransitionKey.OBSERVATION] = (
         env.get_raw_joint_positions() if hasattr(env, "get_raw_joint_positions") else {}
     )
-    
     processed_action_transition = action_processor(transition)
     processed_action = processed_action_transition[TransitionKey.ACTION]
 
@@ -566,18 +550,7 @@ def step_env_and_process_transition(
     reward = reward + processed_action_transition[TransitionKey.REWARD]
     terminated = terminated or processed_action_transition[TransitionKey.DONE]
     truncated = truncated or processed_action_transition[TransitionKey.TRUNCATED]
-    
     complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
-    # complementary_data['teleop_action'] = info.get('teleop_action', None)
-    if isinstance(info["teleop_action"], np.ndarray):
-        action_shape = env.action_space.shape[0]
-        final_action = info["teleop_action"][:action_shape-1]
-        final_action = np.concatenate([final_action, [info["teleop_action"][-1]]])  # Ensure gripper action
-        final_action = torch.tensor(final_action, device=action.device, dtype=action.dtype)
-    complementary_data['teleop_action'] = final_action
-
-    logging.info("Step teleop action: %s", complementary_data["teleop_action"])
-    
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
 
@@ -637,31 +610,19 @@ def control_loop(
 
     dataset = None
     if cfg.mode == "record":
-    # Handle gym_hil environments where teleop_device is None
-        if teleop_device is None:
-            # For gym_hil, get action features from the environment
-            action_shape = env.action_space.shape
+        if teleop_device:
+            action_features = teleop_device.action_features
+        else:
             action_features = {
                 "dtype": "float32",
-                "shape": action_shape,
-                "names": None,
+                "shape": (4,),
+                "names": ["delta_x", "delta_y", "delta_z", "gripper"],
             }
-        else:
-            action_features = teleop_device.action_features
-        
         features = {
             ACTION: action_features,
             REWARD: {"dtype": "float32", "shape": (1,), "names": None},
             DONE: {"dtype": "bool", "shape": (1,), "names": None},
         }
-        
-        # Label of where the executed action came from: base_policy / gamepad / planner
-        features["complementary_info.intervention_source"] = {
-            "dtype": "int64",
-            "shape": (1,),
-            "names": None,
-        }
-        
         if use_gripper:
             features["complementary_info.discrete_penalty"] = {
                 "dtype": "float32",
@@ -692,28 +653,21 @@ def control_loop(
             image_writer_threads=4,
             image_writer_processes=0,
             features=features,
-            batch_encoding_size=cfg.dataset.video_encoding_batch_size,
-            vcodec=cfg.dataset.vcodec,
         )
 
     episode_idx = 0
     episode_step = 0
     episode_start_time = time.perf_counter()
-    logging.info(f"episode [{episode_idx}] starting ...")
 
     while episode_idx < cfg.dataset.num_episodes_to_record:
         step_start_time = time.perf_counter()
 
         # Create a neutral action (no movement)
-        action_shape = env.action_space.shape[0]
-        neutral_action = torch.zeros(action_shape-1, dtype=torch.float32)
+        neutral_action = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
         if use_gripper:
             neutral_action = torch.cat([neutral_action, torch.tensor([0.0])])  # Gripper stay
 
         # Use the new step function
-        # This function will never modify TransitionKey.ACTION
-        # After this function, transition should have neutral action in TransitionKey.ACTION,
-        # and Teleop action in TransitionKey.COMPLEMENTARY_DATA["teleop_action"]
         transition = step_env_and_process_transition(
             env=env,
             transition=transition,
@@ -734,12 +688,6 @@ def control_loop(
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
             )
-            logging.info(f"     Recording action: {action_to_record}")
-            # Encode intervention source as an integer label for logging
-            source_str = transition[TransitionKey.INFO].get("intervention_source", "base_policy")
-            source_map = {"base_policy": 0, "gamepad": 1, "planner": 2}
-            source_id = source_map.get(source_str, 0)
-
             frame = {
                 **observations,
                 ACTION: action_to_record.cpu(),
@@ -749,8 +697,6 @@ def control_loop(
             if use_gripper:
                 discrete_penalty = transition[TransitionKey.COMPLEMENTARY_DATA].get("discrete_penalty", 0.0)
                 frame["complementary_info.discrete_penalty"] = np.array([discrete_penalty], dtype=np.float32)
-            # Always log where the intervention came from (base_policy=0, gamepad=1, planner=2)
-            frame["complementary_info.intervention_source"] = np.array([source_id], dtype=np.int64)
 
             if dataset is not None:
                 frame["task"] = cfg.dataset.task
@@ -762,7 +708,7 @@ def control_loop(
         if terminated or truncated:
             episode_time = time.perf_counter() - episode_start_time
             logging.info(
-                f"    Episode [{episode_idx}] ended after {episode_step} steps in {episode_time:.1f}s with reward {transition[TransitionKey.REWARD]}"
+                f"Episode ended after {episode_step} steps in {episode_time:.1f}s with reward {transition[TransitionKey.REWARD]}"
             )
             episode_step = 0
             episode_idx += 1
@@ -773,17 +719,8 @@ def control_loop(
                     dataset.clear_episode_buffer()
                     episode_idx -= 1
                 else:
-                    if cfg.env.name == "suite_hil":
-                        if episode_idx == 1:
-                            dataset.clear_episode_buffer()
-                            logging.info(f"Ignore episode {episode_idx}")
-                        else:
-                            dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
-                            logging.info(f"Saving episode {episode_idx}")
-                    else:
-                        dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
-                        logging.info(f"Saving episode {episode_idx}")                        
-                        
+                    logging.info(f"Saving episode {episode_idx}")
+                    dataset.save_episode()
 
             # Reset for new episode
             obs, info = env.reset()
