@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from termcolor import colored
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -783,7 +785,15 @@ def control_loop(
                         logging.info(f"Saving episode {episode_idx}")                        
                         
 
-            # Reset for new episode
+            # All episodes done: exit immediately without resetting the environment
+            if episode_idx >= cfg.dataset.num_episodes_to_record:
+                print(colored(
+                    f"✓ All {cfg.dataset.num_episodes_to_record} episodes recorded. Exiting.",
+                    color="green", attrs=["bold"]
+                ))
+                break
+
+            # Reset for next episode
             obs, info = env.reset()
             env_processor.reset()
             action_processor.reset()
@@ -793,6 +803,8 @@ def control_loop(
 
         # Maintain fps timing
         precise_sleep(max(dt - (time.perf_counter() - step_start_time), 0.0))
+
+    env.close()
 
     if dataset is not None and cfg.dataset.push_to_hub:
         logging.info("Pushing dataset to hub")
@@ -840,6 +852,7 @@ def main(cfg: GymManipulatorConfig) -> None:
 
     if cfg.mode == "replay":
         replay_trajectory(env, action_processor, cfg)
+        env.close()
         exit()
 
     control_loop(env, env_processor, action_processor, teleop_device, cfg)
