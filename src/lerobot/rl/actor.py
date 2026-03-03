@@ -327,11 +327,17 @@ def act_with_policy(
             episode_intervention = True
             episode_intervention_steps += 1
 
+        comp_data = new_transition[TransitionKey.COMPLEMENTARY_DATA]
         complementary_info = {
             "discrete_penalty": torch.tensor(
-                [new_transition[TransitionKey.COMPLEMENTARY_DATA].get("discrete_penalty", 0.0)]
+                [comp_data.get("discrete_penalty", 0.0)]
             ),
         }
+
+        if "planner_action" in comp_data:
+            complementary_info["planner_action"] = comp_data["planner_action"]
+            complementary_info["task_phase"] = comp_data.get("task_phase", 0)
+
         # Create transition for learner (convert to old format)
         list_transition_to_send_to_learner.append(
             Transition(

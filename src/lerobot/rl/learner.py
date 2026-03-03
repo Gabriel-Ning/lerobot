@@ -480,6 +480,7 @@ def add_actor_information_and_train(
             "done": done,
             "observation_feature": observation_features,
             "next_observation_feature": next_observation_features,
+            "complementary_info": batch.get("complementary_info"),
         }
 
         critic_output = policy.forward(forward_batch, model="critic")
@@ -529,6 +530,8 @@ def add_actor_information_and_train(
                 # Add actor info to training info
                 training_infos["loss_actor"] = loss_actor.item()
                 training_infos["actor_grad_norm"] = actor_grad_norm
+                if "loss_bc" in actor_output:
+                    training_infos["loss_bc"] = actor_output["loss_bc"].item()
 
                 # Temperature optimization
                 temperature_output = policy.forward(forward_batch, model="temperature")

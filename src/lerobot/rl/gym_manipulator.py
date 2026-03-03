@@ -46,6 +46,7 @@ from lerobot.processor import (
     RewardClassifierProcessorStep,
     RobotActionToPolicyActionProcessorStep,
     RobotObservation,
+    StripeEnvProcessorStep,
     TimeLimitProcessorStep,
     Torch2NumpyActionProcessorStep,
     TransitionKey,
@@ -81,6 +82,70 @@ from lerobot.utils.utils import log_say
 from .joint_observations_processor import JointVelocityProcessorStep, MotorCurrentProcessorStep
 
 logging.basicConfig(level=logging.INFO)
+
+# ---------------------------------------------------------------------------
+# Complementary data schema for recording
+# ---------------------------------------------------------------------------
+# Centralized definition of extra fields recorded alongside each frame.
+# Adding a new field: (1) add an entry here, (2) populate it in
+# step_env_and_process_transition's complementary_data dict.
+# features & frame dicts are auto-generated from this schema.
+COMPLEMENTARY_SCHEMA: dict[str, dict] = {
+    "teleop_action":       {"dtype": "float32", "shape_ref": "action"},
+    "planner_action":      {"dtype": "float32", "shape_ref": "action"},
+    "task_phase":          {"dtype": "int64",   "shape": (1,)},
+    "intervention_source": {"dtype": "int64",   "shape": (1,)},
+    "discrete_penalty":    {"dtype": "float32", "shape": (1,)},
+}
+
+
+def build_complementary_features(
+    schema: dict[str, dict], action_shape: tuple[int, ...]
+) -> dict[str, dict]:
+    """Generate LeRobotDataset feature specs from *schema*.
+
+    Args:
+        schema: COMPLEMENTARY_SCHEMA or a subset.
+        action_shape: shape of the action tensor (used when shape_ref="action").
+
+    Returns:
+        Dict mapping ``"complementary_info.<name>"`` to feature spec dicts.
+    """
+    features: dict[str, dict] = {}
+    for name, spec in schema.items():
+        shape = action_shape if spec.get("shape_ref") == "action" else spec["shape"]
+        features[f"complementary_info.{name}"] = {
+            "dtype": spec["dtype"],
+            "shape": shape,
+            "names": None,
+        }
+    return features
+
+
+def build_complementary_frame(
+    schema: dict[str, dict], complementary_data: dict
+) -> dict:
+    """Build dataset frame entries from *complementary_data*.
+
+    Args:
+        schema: COMPLEMENTARY_SCHEMA or a subset.
+        complementary_data: dict populated in step_env_and_process_transition.
+
+    Returns:
+        Dict mapping ``"complementary_info.<name>"`` to numpy/tensor values.
+    """
+    frame: dict = {}
+    for name, spec in schema.items():
+        value = complementary_data.get(name)
+        if value is None:
+            continue
+        key = f"complementary_info.{name}"
+        if isinstance(value, torch.Tensor):
+            frame[key] = value.cpu()
+        elif isinstance(value, (int, float, np.integer, np.floating)):
+            dtype = np.int64 if "int" in spec["dtype"] else np.float32
+            frame[key] = np.array([value], dtype=dtype)
+    return frame
 
 
 @dataclass
@@ -319,28 +384,19 @@ def make_robot_env(cfg: HILSerlRobotEnvConfig) -> tuple[gym.Env, Any]:
     # Check if this is a GymHIL simulation environment
     if cfg.name == "gym_hil":
         assert cfg.robot is None and cfg.teleop is None, "GymHIL environment does not support robot or teleop"
-        # import gym_hil  # noqa: F401
-        import stripe
+        import stripe  # noqa: F401
 
-        # Extract gripper settings with defaults
-        use_gripper = cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else True
-        gripper_penalty = cfg.processor.gripper.gripper_penalty if cfg.processor.gripper is not None else 0.0
+        env = gym.make(cfg.task)
 
-        env = gym.make(
-            f"{cfg.task}"
-        )
-
-        return env, None
-    elif cfg.name == "suite_hil":
-        assert cfg.robot is None and cfg.teleop is None, "GymHIL environment does not support robot or teleop"
-        import gym_hil  # noqa: F401
-        from gym_hil.wrappers.factory import make_robosuite_wrapperd_env
-
-        # Extract gripper settings with defaults
-        use_gripper = cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else True
-        gripper_penalty = cfg.processor.gripper.gripper_penalty if cfg.processor.gripper is not None else 0.0
-
-        env = make_robosuite_wrapperd_env()
+        # Warmup: full reset-step cycle through the assembled wrapper stack.
+        # The MuJoCo viewer (GLFW) created on the first reset can invalidate
+        # the offscreen renderer (EGL) context. The subsequent control_loop
+        # env.reset() triggers viewer close-reopen, restoring the EGL context
+        # before the first recorded episode starts.
+        env.reset()
+        warmup_action = np.zeros(env.action_space.shape[0])
+        for _ in range(3):
+            env.step(warmup_action)
 
         return env, None
 
@@ -389,13 +445,15 @@ def make_processors(
         cfg.processor.reset.terminate_on_success if cfg.processor.reset is not None else True
     )
 
-    if cfg.name == "gym_hil" or cfg.name == "suite_hil":
+    if cfg.name == "gym_hil":
         action_pipeline_steps = [
             InterventionActionProcessorStep(terminate_on_success=terminate_on_success),
             Torch2NumpyActionProcessorStep(),
         ]
 
+        action_dim = env.action_space.shape[0]
         env_pipeline_steps = [
+            StripeEnvProcessorStep(action_dim=action_dim),
             Numpy2TorchActionProcessorStep(),
             VanillaObservationProcessorStep(),
             AddBatchDimensionProcessorStep(),
@@ -568,16 +626,7 @@ def step_env_and_process_transition(
     truncated = truncated or processed_action_transition[TransitionKey.TRUNCATED]
     
     complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
-    # complementary_data['teleop_action'] = info.get('teleop_action', None)
-    if isinstance(info["teleop_action"], np.ndarray):
-        action_shape = env.action_space.shape[0]
-        final_action = info["teleop_action"][:action_shape-1]
-        final_action = np.concatenate([final_action, [info["teleop_action"][-1]]])  # Ensure gripper action
-        final_action = torch.tensor(final_action, device=action.device, dtype=action.dtype)
-    complementary_data['teleop_action'] = final_action
 
-    logging.info("Step teleop action: %s", complementary_data["teleop_action"])
-    
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
 
@@ -622,6 +671,7 @@ def control_loop(
 
     # Reset environment and processors
     obs, info = env.reset()
+
     complementary_data = (
         {"raw_joint_positions": info.pop("raw_joint_positions")} if "raw_joint_positions" in info else {}
     )
@@ -637,10 +687,9 @@ def control_loop(
 
     dataset = None
     if cfg.mode == "record":
-    # Handle gym_hil environments where teleop_device is None
+        # Resolve action shape and features
+        action_shape = env.action_space.shape
         if teleop_device is None:
-            # For gym_hil, get action features from the environment
-            action_shape = env.action_space.shape
             action_features = {
                 "dtype": "float32",
                 "shape": action_shape,
@@ -648,26 +697,15 @@ def control_loop(
             }
         else:
             action_features = teleop_device.action_features
-        
+
         features = {
             ACTION: action_features,
             REWARD: {"dtype": "float32", "shape": (1,), "names": None},
             DONE: {"dtype": "bool", "shape": (1,), "names": None},
         }
-        
-        # Label of where the executed action came from: base_policy / gamepad / planner
-        features["complementary_info.intervention_source"] = {
-            "dtype": "int64",
-            "shape": (1,),
-            "names": None,
-        }
-        
-        if use_gripper:
-            features["complementary_info.discrete_penalty"] = {
-                "dtype": "float32",
-                "shape": (1,),
-                "names": ["discrete_penalty"],
-            }
+
+        # Complementary data features (schema-driven)
+        features.update(build_complementary_features(COMPLEMENTARY_SCHEMA, action_shape))
 
         for key, value in transition[TransitionKey.OBSERVATION].items():
             if key == OBS_STATE:
@@ -730,15 +768,9 @@ def control_loop(
                 for k, v in transition[TransitionKey.OBSERVATION].items()
                 if isinstance(v, torch.Tensor)
             }
-            # Use teleop_action if available, otherwise use the action from the transition
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
             )
-            logging.info(f"     Recording action: {action_to_record}")
-            # Encode intervention source as an integer label for logging
-            source_str = transition[TransitionKey.INFO].get("intervention_source", "base_policy")
-            source_map = {"base_policy": 0, "gamepad": 1, "planner": 2}
-            source_id = source_map.get(source_str, 0)
 
             frame = {
                 **observations,
@@ -746,11 +778,10 @@ def control_loop(
                 REWARD: np.array([transition[TransitionKey.REWARD]], dtype=np.float32),
                 DONE: np.array([terminated or truncated], dtype=bool),
             }
-            if use_gripper:
-                discrete_penalty = transition[TransitionKey.COMPLEMENTARY_DATA].get("discrete_penalty", 0.0)
-                frame["complementary_info.discrete_penalty"] = np.array([discrete_penalty], dtype=np.float32)
-            # Always log where the intervention came from (base_policy=0, gamepad=1, planner=2)
-            frame["complementary_info.intervention_source"] = np.array([source_id], dtype=np.int64)
+            # Complementary data (schema-driven)
+            frame.update(build_complementary_frame(
+                COMPLEMENTARY_SCHEMA, transition[TransitionKey.COMPLEMENTARY_DATA]
+            ))
 
             if dataset is not None:
                 frame["task"] = cfg.dataset.task
@@ -773,17 +804,8 @@ def control_loop(
                     dataset.clear_episode_buffer()
                     episode_idx -= 1
                 else:
-                    if cfg.env.name == "suite_hil":
-                        if episode_idx == 1:
-                            dataset.clear_episode_buffer()
-                            logging.info(f"Ignore episode {episode_idx}")
-                        else:
-                            dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
-                            logging.info(f"Saving episode {episode_idx}")
-                    else:
-                        dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
-                        logging.info(f"Saving episode {episode_idx}")                        
-                        
+                    dataset.save_episode(parallel_encoding=cfg.dataset.parallel_encoding)
+                    logging.info(f"Saving episode {episode_idx}")
 
             # All episodes done: exit immediately without resetting the environment
             if episode_idx >= cfg.dataset.num_episodes_to_record:

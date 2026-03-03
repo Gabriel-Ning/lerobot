@@ -37,6 +37,7 @@ from lerobot.policies.pi05.configuration_pi05 import PI05Config
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.sac.configuration_sac import SACConfig
 from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
+from lerobot.policies.sac_stripe.configuration_sac_stripe import SACStripeConfig
 from lerobot.policies.sarm.configuration_sarm import SARMConfig
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
@@ -107,6 +108,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.sac.modeling_sac import SACPolicy
 
         return SACPolicy
+    elif name == "sac_stripe":
+        from lerobot.policies.sac_stripe.modeling_sac_stripe import SACStripePolicy
+
+        return SACStripePolicy
     elif name == "reward_classifier":
         from lerobot.policies.sac.reward_model.modeling_classifier import Classifier
 
@@ -171,6 +176,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return PI05Config(**kwargs)
     elif policy_type == "sac":
         return SACConfig(**kwargs)
+    elif policy_type == "sac_stripe":
+        return SACStripeConfig(**kwargs)
     elif policy_type == "smolvla":
         return SmolVLAConfig(**kwargs)
     elif policy_type == "reward_classifier":

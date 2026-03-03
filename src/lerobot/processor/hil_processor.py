@@ -344,6 +344,75 @@ class GymHILAdapterProcessorStep(ProcessorStep):
 
 
 @dataclass
+@ProcessorStepRegistry.register("stripe_env_processor")
+class StripeEnvProcessorStep(ProcessorStep):
+    """Extract STRIPE control metadata from info into complementary_data.
+
+    Runs in the env pipeline after env.step(). Reads from info dict
+    populated by PlannerInputsControlWrapper and TaskContextWrapper,
+    then writes structured data into complementary_data for recording
+    and downstream training.
+
+    Fields written to complementary_data:
+        teleop_action:       float tensor (action_dim,) — actually executed action
+        planner_action:      float tensor (action_dim,) — expert planner action (zeros when inactive)
+        task_phase:          int  — 1=approach, 2=manipulation, 0=unknown
+        intervention_source: int  — 0=policy, 1=gamepad, 2=planner
+        discrete_penalty:    float — default 0.0 (may be overwritten by GripperPenaltyProcessorStep)
+    """
+
+    action_dim: int = 4
+
+    _SOURCE_MAP: dict = None  # populated in __post_init__
+
+    def __post_init__(self):
+        self._SOURCE_MAP = {"base_policy": 0, "gamepad": 1, "planner": 2}
+
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        new_transition = transition.copy()
+        info = new_transition.get(TransitionKey.INFO, {})
+        complementary_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
+
+        # teleop_action: trim to action_dim (position dims + gripper)
+        teleop = info.get("teleop_action")
+        if isinstance(teleop, np.ndarray):
+            trimmed = np.concatenate([teleop[: self.action_dim - 1], [teleop[-1]]])
+            complementary_data["teleop_action"] = torch.tensor(trimmed, dtype=torch.float32)
+        elif teleop is not None:
+            raise TypeError(
+                f"info['teleop_action'] expected np.ndarray, got {type(teleop)}. "
+                "Ensure PlannerInputsControlWrapper is in the env wrapper stack."
+            )
+
+        # planner_action: zeros when inactive (validity masked by task_phase)
+        planner = info.get("planner_action")
+        if planner is not None and isinstance(planner, np.ndarray):
+            trimmed = np.concatenate([planner[: self.action_dim - 1], [planner[-1]]])
+            complementary_data["planner_action"] = torch.tensor(trimmed, dtype=torch.float32)
+        else:
+            complementary_data["planner_action"] = torch.zeros(self.action_dim, dtype=torch.float32)
+
+        # task_phase: 1=approach, 2=manipulation, 0=unknown
+        task_ctx = info.get("task_ctx")
+        complementary_data["task_phase"] = task_ctx.phase if task_ctx is not None else 0
+
+        # intervention_source: 0=policy, 1=gamepad, 2=planner
+        source_str = info.get("intervention_source", "base_policy")
+        complementary_data["intervention_source"] = self._SOURCE_MAP.get(source_str, 0)
+
+        # discrete_penalty default (may be overwritten by GripperPenaltyProcessorStep later)
+        complementary_data.setdefault("discrete_penalty", 0.0)
+
+        new_transition[TransitionKey.COMPLEMENTARY_DATA] = complementary_data
+        return new_transition
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        return features
+
+
+@dataclass
 @ProcessorStepRegistry.register("gripper_penalty_processor")
 class GripperPenaltyProcessorStep(ProcessorStep):
     """
@@ -486,7 +555,7 @@ class InterventionActionProcessorStep(ProcessorStep):
             else:
                 action_list = teleop_action
 
-            teleop_action_tensor = torch.tensor(action_list, dtype=action.dtype, device=action.device)
+            teleop_action_tensor = torch.as_tensor(action_list, dtype=action.dtype, device=action.device)
             new_transition[TransitionKey.ACTION] = teleop_action_tensor
 
         # Handle episode termination

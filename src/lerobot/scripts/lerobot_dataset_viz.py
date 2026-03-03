@@ -85,6 +85,37 @@ def to_hwc_uint8_numpy(chw_float32_torch: torch.Tensor) -> np.ndarray:
     return hwc_uint8_numpy
 
 
+def log_numeric_tensor(key: str, tensor: torch.Tensor) -> None:
+    """Log numeric tensors as scalar curves in Rerun.
+
+    - Scalar tensor -> log once at `key`
+    - Vector/ND tensor -> flatten and log at `key/<flat_idx>`
+    """
+    if not torch.is_tensor(tensor):
+        return
+    if tensor.numel() == 0:
+        return
+    if tensor.dtype not in (
+        torch.float16,
+        torch.float32,
+        torch.float64,
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+        torch.uint8,
+        torch.bool,
+    ):
+        return
+
+    flat = tensor.reshape(-1)
+    if flat.numel() == 1:
+        rr.log(key, rr.Scalars(flat[0].item()))
+    else:
+        for dim_idx, val in enumerate(flat):
+            rr.log(f"{key}/{dim_idx}", rr.Scalars(val.item()))
+
+
 def visualize_dataset(
     dataset: LeRobotDataset,
     episode_index: int,
@@ -162,6 +193,13 @@ def visualize_dataset(
 
             if "next.success" in batch:
                 rr.log("next.success", rr.Scalars(batch["next.success"][i].item()))
+
+            # Display all schema-driven complementary signals when present
+            # (e.g. teleop_action, planner_action, task_phase, intervention_source).
+            for key, value in batch.items():
+                if not key.startswith("complementary_info."):
+                    continue
+                log_numeric_tensor(key, value[i])
 
     if mode == "local" and save:
         # save .rrd locally
