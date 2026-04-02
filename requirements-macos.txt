@@ -432,7 +432,7 @@ propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
-protobuf==6.31.1
+protobuf==6.33.5
     # via
     #   dm-control
     #   grpcio-tools
