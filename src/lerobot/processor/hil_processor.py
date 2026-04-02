@@ -363,7 +363,7 @@ class StripeEnvProcessorStep(ProcessorStep):
 
     action_dim: int = 4
 
-    _SOURCE_MAP: dict = None  # populated in __post_init__
+    _SOURCE_MAP: dict | None = None  # populated in __post_init__
 
     def __post_init__(self):
         self._SOURCE_MAP = {"base_policy": 0, "gamepad": 1, "planner": 2}
