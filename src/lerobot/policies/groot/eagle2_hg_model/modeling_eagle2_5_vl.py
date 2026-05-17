@@ -61,6 +61,7 @@ class Eagle25VLPreTrainedModel(PreTrainedModel):
     ]
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
+    _supports_flash_attn = True   # transformers>=5.5 renamed from _supports_flash_attn_2
     _supports_cache_class = True
     _supports_static_cache = True
     _supports_quantized_cache = True
@@ -80,6 +81,8 @@ class Eagle25VLPreTrainedModel(PreTrainedModel):
 
 class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixin):
     config_class = Eagle25VLConfig
+    _supports_flash_attn_2 = True  # old name
+    _supports_flash_attn = True    # transformers>=5.5 renamed attribute
 
     def __init__(self, config: Eagle25VLConfig, vision_model=None, language_model=None):
         super().__init__(config)
