@@ -19,7 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import torch
+from PIL import Image
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor import (
@@ -35,7 +37,7 @@ from lerobot.processor import (
     UnnormalizerProcessorStep,
 )
 from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
-from lerobot.types import TransitionKey
+from lerobot.types import EnvTransition, TransitionKey
 from lerobot.utils.constants import (
     OBS_STATE,
     POLICY_POSTPROCESSOR_DEFAULT_NAME,
@@ -49,6 +51,18 @@ if TYPE_CHECKING or _transformers_available:
     from transformers.models.qwen2_5_vl import Qwen2_5_VLProcessor
 else:
     Qwen2_5_VLProcessor = None
+
+
+def _to_uint8_np_bhwc(img_t: torch.Tensor) -> np.ndarray:
+    """Convert ``(B, C, H, W)`` image tensor to ``(B, H, W, C)`` ``uint8`` host numpy.
+
+    Mirrors :func:`lerobot.policies.groot.processor_groot._to_uint8_np_bhwc` so that
+    EO1's multimodal preprocessing runs on the host (numpy/PIL) regardless of where
+    the dataloader placed the batch. Floats are assumed to live in ``[0, 1]``.
+    """
+    if img_t.dtype.is_floating_point:
+        img_t = (img_t.clamp(0, 1) * 255.0).to(torch.uint8)
+    return img_t.detach().to(device="cpu").numpy().transpose(0, 2, 3, 1)
 
 SYSTEM_MESSAGE = "You are a helpful physical assistant."
 
@@ -74,14 +88,28 @@ EO1_SPECIAL_TOKENS = [
 
 @dataclass
 @ProcessorStepRegistry.register(name="eo1_conversation_template_processor")
-class EO1ConversationTemplateStep(ComplementaryDataProcessorStep):
+class EO1ConversationTemplateStep(ProcessorStep):
+    """Build EO1 multimodal conversations with host-side PIL images.
+
+    Aligned with the Groot/Eagle pattern: visual observations are converted to
+    ``numpy``/``PIL`` on the host *before* being handed to the Hugging Face
+    ``Qwen2_5_VLProcessor``. That keeps the heavy backbone on the GPU while the
+    third-party image processor (which internally calls ``image.numpy()``)
+    receives host inputs. The downstream ``DeviceProcessorStep(cuda)`` then
+    performs a single host-to-device transfer of the Qwen tensors
+    (``pixel_values``, ``image_grid_thw``, ``input_ids`` ...).
+
+    The original image tensors are removed from the observation (mirroring
+    Groot's ``obs.pop("video")``) so the final device step does not need to
+    ship them to the GPU again.
+    """
+
     input_features: dict[str, PolicyFeature] | dict[str, dict[str, Any]]
     chunk_size: int
 
     _image_keys: list[str] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self):
-        # Robust JSON deserialization handling (guard empty maps).
         if self.input_features:
             first_val = next(iter(self.input_features.values()))
             if isinstance(first_val, dict):
@@ -96,27 +124,35 @@ class EO1ConversationTemplateStep(ComplementaryDataProcessorStep):
             key for key, value in self.input_features.items() if value.type == FeatureType.VISUAL
         ]
 
-    def complementary_data(self, complementary_data):
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        transition = transition.copy()
+
+        observation = transition.get(TransitionKey.OBSERVATION)
+        if observation is None or not isinstance(observation, dict):
+            raise ValueError("Observation is required for EO1ConversationTemplateStep.")
+        complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA)
+        if complementary_data is None or not isinstance(complementary_data, dict):
+            raise ValueError("Complementary data is required for EO1ConversationTemplateStep.")
+
         tasks = complementary_data.get("task")
         if tasks is None:
             raise ValueError("Task is required for EO1ConversationTemplateStep.")
 
-        observation = self.transition.get(TransitionKey.OBSERVATION)
-        if observation is None:
-            raise ValueError("Observation is required for EO1ConversationTemplateStep.")
-
         if OBS_STATE in observation and observation[OBS_STATE].shape[0] != len(tasks):
             raise ValueError("Batch size mismatch between observation.state and task list.")
 
-        # LeRobot visual observations reach in processor as float32 tensors in [0, 1].
-        # Convert to uint8 in [0, 255] to meet the input requirement of Qwen2.5-VL-3B-Instruct.
-        images = {
-            key: observation[key].clamp(0, 1).mul(255.0).round().to(torch.uint8) for key in self._image_keys
-        }
+        observation = dict(observation)
+        image_lists: dict[str, list[Image.Image]] = {}
+        for key in self._image_keys:
+            np_imgs = _to_uint8_np_bhwc(observation[key])
+            image_lists[key] = [Image.fromarray(np_imgs[i]) for i in range(np_imgs.shape[0])]
+            observation.pop(key, None)
+        transition[TransitionKey.OBSERVATION] = observation
+
         messages = []
         for i in range(len(tasks)):
             content = [
-                *[{"type": "image", "image": images[key][i]} for key in self._image_keys],
+                *[{"type": "image", "image": image_lists[key][i]} for key in self._image_keys],
                 {
                     "type": "text",
                     "text": (
@@ -140,17 +176,19 @@ class EO1ConversationTemplateStep(ComplementaryDataProcessorStep):
                 ]
             )
 
+        complementary_data = dict(complementary_data)
         complementary_data["messages"] = messages
+        transition[TransitionKey.COMPLEMENTARY_DATA] = complementary_data
 
-        return complementary_data
+        return transition
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
-        """
-        This step only materializes EO1-specific message objects in complementary_data.
-        PipelineFeatureType tracks only ACTION and OBSERVATION, so there is no static
-        feature contract change to record here.
+        """The step only materializes EO1-specific messages and pops raw image keys.
+
+        ``PipelineFeatureType`` tracks only ACTION and OBSERVATION, so there is no
+        static feature contract change to record here.
         """
         return features
 
