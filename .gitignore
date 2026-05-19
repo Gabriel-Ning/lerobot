@@ -162,6 +162,10 @@ wandb/
 # Dev scripts
 .dev/
 
+# Repo-local Codex agents and skills
+!.agents/
+!.agents/**
+
 # Data folders
 data/
 outputs/
