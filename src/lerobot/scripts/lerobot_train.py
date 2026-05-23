@@ -320,6 +320,10 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 "norm_map": policy.config.normalization_mapping,
             },
         }
+        if active_cfg.type == "pi0_fast" and getattr(active_cfg, "action_tokenizer_name", None):
+            processor_kwargs["preprocessor_overrides"]["action_tokenizer_processor"] = {
+                "action_tokenizer_name": active_cfg.action_tokenizer_name,
+            }
         processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
             "rename_map": cfg.rename_map
         }
